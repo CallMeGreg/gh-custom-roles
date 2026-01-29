@@ -78,8 +78,8 @@ gh custom-roles create \
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--hostname` | `-u` | GitHub hostname | Prompt (defaults to `github.com`) |
-| `--enterprise` | `-e` | Enterprise slug | Prompt (defaults to `github`) |
+| `--hostname` | `-u` | GitHub hostname | `github.com` |
+| `--enterprise` | `-e` | Enterprise slug | `github` |
 | `--org` | `-o` | Target a single organization | - |
 | `--all-orgs` | `-a` | Target all organizations in enterprise | - |
 | `--orgs-csv` | `-c` | Path to CSV file with organization names | - |
