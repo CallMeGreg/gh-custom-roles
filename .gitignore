@@ -6,6 +6,7 @@
 *.dylib
 *.test
 *.out
+gh-custom-roles
 
 # Output directories
 /bin/
