@@ -1,0 +1,32 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Output directories
+/bin/
+/build/
+/dist/
+/tmp/
+
+# Go workspace files
+/go.work
+/go.work.sum
+
+# Coverage
+/coverage.out
+/*.cover
+
+# IDE
+/.idea/
+/.vscode/
+
+# OS
+.DS_Store
+
+# Organization file
+orgs.csv

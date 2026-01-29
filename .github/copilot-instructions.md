@@ -41,3 +41,9 @@ You are helping build GitHub CLI (gh) extensions in Go. Follow these practices:
 ## Logging
 - Use `pterm` for all logging (info, warnings, errors, success).
 - Keep logs concise and user-friendly.
+
+## README.md Documentation
+- Ensure the README.md includes:
+  - Clear pre-requisite, installation, and authentication instructions.
+  - Usage examples with flags and interactive prompts.
+  - Description of features and limitations.
