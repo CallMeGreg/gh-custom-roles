@@ -143,15 +143,6 @@ func runCreate(_ *cobra.Command, _ []string) error {
 
 	validOrgs := orgs
 
-	permissions, err := listFineGrainedPermissions(opts.hostname, validOrgs[0])
-	if err != nil {
-		return err
-	}
-	selectedPermissions, err := resolvePermissions(opts.permissions, permissions)
-	if err != nil {
-		return err
-	}
-
 	if opts.roleName == "" {
 		input := pterm.DefaultInteractiveTextInput
 		opts.roleName, err = input.Show("Custom role name")
@@ -173,6 +164,15 @@ func runCreate(_ *cobra.Command, _ []string) error {
 	}
 
 	baseRole, err := resolveBaseRole(opts.baseRole)
+	if err != nil {
+		return err
+	}
+
+	permissions, err := listFineGrainedPermissions(opts.hostname, validOrgs[0])
+	if err != nil {
+		return err
+	}
+	selectedPermissions, err := resolvePermissions(opts.permissions, permissions)
 	if err != nil {
 		return err
 	}
