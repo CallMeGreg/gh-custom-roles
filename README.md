@@ -50,8 +50,8 @@ gh custom-roles create
 
 The extension will prompt you for:
 1. GitHub hostname (defaults to `github.com`)
-2. Enterprise slug (defaults to `github`)
-3. Target selection: single organization, all organizations in enterprise, or CSV file
+2. Target selection: single organization, all organizations in enterprise, or CSV file
+3. Enterprise slug (only if targeting all organizations, defaults to `github`)
 4. Custom role name and optional description
 5. Base role (read, triage, write, maintain)
 6. Fine-grained permissions (with descriptions shown)
@@ -79,7 +79,7 @@ gh custom-roles create \
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
 | `--hostname` | `-u` | GitHub hostname | `github.com` |
-| `--enterprise` | `-e` | Enterprise slug | `github` |
+| `--enterprise` | `-e` | Enterprise slug (required for `--all-orgs`) | `github` |
 | `--org` | `-o` | Target a single organization | - |
 | `--all-orgs` | `-a` | Target all organizations in enterprise | - |
 | `--orgs-csv` | `-c` | Path to CSV file with organization names | - |
