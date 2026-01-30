@@ -6,6 +6,7 @@
 *.dylib
 *.test
 *.out
+gh-custom-roles
 
 # Output directories
 /bin/
@@ -30,3 +31,6 @@
 
 # Organization file
 orgs.csv
+
+# Release script
+release.sh

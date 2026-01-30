@@ -175,6 +175,28 @@ func runCreate(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Display confirmation before creating roles
+	pterm.Println()
+	pterm.DefaultSection.Println("Confirmation")
+	pterm.Info.Printfln("Role Name: %s", opts.roleName)
+	if opts.roleDesc != "" {
+		pterm.Info.Printfln("Description: %s", opts.roleDesc)
+	}
+	pterm.Info.Printfln("Base Role: %s", baseRole)
+	pterm.Info.Printfln("Permissions: %s", strings.Join(selectedPermissions, ", "))
+	pterm.Info.Printfln("Target Organizations: %d", len(validOrgs))
+	pterm.Println()
+
+	confirm, err := pterm.DefaultInteractiveConfirm.Show("Begin role creation?")
+	if err != nil {
+		return err
+	}
+	if !confirm {
+		pterm.Info.Println("Role creation cancelled.")
+		return nil
+	}
+	pterm.Println()
+
 	progressBar, err := pterm.DefaultProgressbar.WithTotal(len(validOrgs)).WithTitle("Creating custom roles").Start()
 	if err != nil {
 		return err

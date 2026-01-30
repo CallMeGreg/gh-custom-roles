@@ -8,7 +8,9 @@ GitHub CLI extension to create custom repository roles in one or more organizati
 - Support for GitHub Enterprise Server and Enterprise Cloud
 - Interactive prompts when inputs are not provided via flags
 - Batch creation with progress tracking
+- Confirmation step with summary and replication command
 - CSV file support for targeting multiple organizations
+- Skips missing orgs and existing roles with warnings
 
 ## Prerequisites
 
@@ -53,6 +55,9 @@ The extension will prompt you for:
 4. Custom role name and optional description
 5. Base role (read, triage, write, maintain)
 6. Fine-grained permissions (with descriptions shown)
+7. Confirmation before creation
+
+It will then display a summary and a ready-to-run replication command.
 
 ### Non-interactive mode with flags
 
@@ -63,10 +68,10 @@ gh custom-roles create \
   --hostname github.com \
   --enterprise my-enterprise \
   --org myorg \
-  --role-name "custom-developer" \
-  --role-description "Custom developer role" \
+  --role-name "Secret Scanning Resolver" \
+  --role-description "Developers who can view and resolve secret scanning alerts" \
   --base-role write \
-  --permissions "pull_requests:read,issues:write"
+  --permissions "view_secret_scanning_alerts,resolve_secret_scanning_alerts"
 ```
 
 ### Flags
@@ -94,36 +99,12 @@ When no target flag is provided, the extension prompts interactively.
 
 ### CSV file format
 
-Create a CSV file with organization names (one per row, or multiple per row):
+Create a CSV file with organization names (one per row):
 
-```csv
-org1,org2,org3
-org4
-org5,org6
-```
-
-## Examples
-
-### Create role in single organization
-
-```bash
-gh custom-roles create --org myorg --role-name "custom-reviewer" --base-role read
-```
-
-### Create role in all organizations in enterprise
-
-```bash
-gh custom-roles create --all-orgs --enterprise my-enterprise --role-name "custom-maintainer" --base-role maintain
-```
-
-### Create role from CSV with specific permissions
-
-```bash
-gh custom-roles create \
-  --orgs-csv orgs.csv \
-  --role-name "custom-security" \
-  --base-role write \
-  --permissions "security_events:read,dependabot_alerts:read"
+```text
+org1
+org2
+org3
 ```
 
 ## Supported versions
