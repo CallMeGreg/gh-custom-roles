@@ -411,7 +411,11 @@ func resolvePermissions(flagValue string, permissions []fineGrainedPermission) (
 		lookup[label] = perm.Name
 	}
 
-	selection, err := pterm.DefaultInteractiveMultiselect.WithOptions(options).Show("Select permissions")
+	selection, err := pterm.DefaultInteractiveMultiselect.
+		WithOptions(options).
+		WithFilter(true).
+		WithMaxHeight(10).
+		Show("Select permissions (Use arrow keys to navigate, space to select, enter to confirm, '/' to search)")
 	if err != nil {
 		return nil, err
 	}
