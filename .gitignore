@@ -31,3 +31,6 @@ gh-custom-roles
 
 # Organization file
 orgs.csv
+
+# Release script
+release.sh
