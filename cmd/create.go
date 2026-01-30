@@ -72,17 +72,6 @@ func runCreate(_ *cobra.Command, _ []string) error {
 			opts.hostname = "github.com"
 		}
 	}
-	if opts.enterprise == "" {
-		input := pterm.DefaultInteractiveTextInput
-		opts.enterprise, err = input.Show("GitHub enterprise slug (press enter for github)")
-		if err != nil {
-			return err
-		}
-		opts.enterprise = strings.TrimSpace(opts.enterprise)
-		if opts.enterprise == "" {
-			opts.enterprise = "github"
-		}
-	}
 
 	targetModeCount := 0
 	if opts.org != "" {
@@ -128,6 +117,19 @@ func runCreate(_ *cobra.Command, _ []string) error {
 			}
 		default:
 			return errors.New("invalid target selection")
+		}
+	}
+
+	// Only prompt for enterprise slug if targeting all organizations
+	if opts.allOrgs && opts.enterprise == "" {
+		input := pterm.DefaultInteractiveTextInput
+		opts.enterprise, err = input.Show("GitHub enterprise slug (press enter for github)")
+		if err != nil {
+			return err
+		}
+		opts.enterprise = strings.TrimSpace(opts.enterprise)
+		if opts.enterprise == "" {
+			opts.enterprise = "github"
 		}
 	}
 
@@ -411,7 +413,11 @@ func resolvePermissions(flagValue string, permissions []fineGrainedPermission) (
 		lookup[label] = perm.Name
 	}
 
-	selection, err := pterm.DefaultInteractiveMultiselect.WithOptions(options).Show("Select permissions")
+	selection, err := pterm.DefaultInteractiveMultiselect.
+		WithOptions(options).
+		WithFilter(true).
+		WithMaxHeight(10).
+		Show("Select permissions (Type to filter, ↑↓ to navigate, Enter to toggle, Tab to confirm)")
 	if err != nil {
 		return nil, err
 	}
