@@ -415,7 +415,7 @@ func resolvePermissions(flagValue string, permissions []fineGrainedPermission) (
 		WithOptions(options).
 		WithFilter(true).
 		WithMaxHeight(10).
-		Show("Select permissions (Use arrow keys to navigate, space to select, enter to confirm, '/' to search)")
+		Show("Select permissions (Type to filter, ↑↓ to navigate, Enter to toggle, Tab to confirm)")
 	if err != nil {
 		return nil, err
 	}
