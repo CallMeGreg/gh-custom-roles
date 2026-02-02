@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
-	"github.com/cli/go-gh"
+	"github.com/cli/go-gh/v2"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,8 @@ type options struct {
 	roleDesc    string
 	baseRole    string
 	permissions string
+	delay       int
+	concurrency int
 }
 
 type fineGrainedPermission struct {
@@ -73,20 +76,7 @@ func runCreate(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	targetModeCount := 0
-	if opts.org != "" {
-		targetModeCount++
-	}
-	if opts.allOrgs {
-		targetModeCount++
-	}
-	if opts.orgsCSVPath != "" {
-		targetModeCount++
-	}
-	if targetModeCount > 1 {
-		return errors.New("choose only one of --org, --all-orgs, or --orgs-csv")
-	}
-	if targetModeCount == 0 {
+	if opts.org == "" && !opts.allOrgs && opts.orgsCSVPath == "" {
 		selectInput := pterm.DefaultInteractiveSelect.WithOptions([]string{"Single organization", "All organizations in enterprise", "CSV file"})
 		mode, modeErr := selectInput.Show("Select target organizations")
 		if modeErr != nil {
@@ -121,16 +111,21 @@ func runCreate(_ *cobra.Command, _ []string) error {
 	}
 
 	// Only prompt for enterprise slug if targeting all organizations
-	if opts.allOrgs && opts.enterprise == "" {
-		input := pterm.DefaultInteractiveTextInput
-		opts.enterprise, err = input.Show("GitHub enterprise slug (press enter for github)")
-		if err != nil {
-			return err
-		}
-		opts.enterprise = strings.TrimSpace(opts.enterprise)
+	if opts.allOrgs {
 		if opts.enterprise == "" {
-			opts.enterprise = "github"
+			input := pterm.DefaultInteractiveTextInput
+			opts.enterprise, err = input.Show("GitHub enterprise slug (press enter for github)")
+			if err != nil {
+				return err
+			}
+			opts.enterprise = strings.TrimSpace(opts.enterprise)
+			if opts.enterprise == "" {
+				opts.enterprise = "github"
+			}
 		}
+	} else {
+		// Clear enterprise if not targeting all orgs
+		opts.enterprise = ""
 	}
 
 	orgs, err := resolveOrganizations(opts)
@@ -189,6 +184,16 @@ func runCreate(_ *cobra.Command, _ []string) error {
 	pterm.Info.Printfln("Target Organizations: %d", len(validOrgs))
 	pterm.Println()
 
+	// Validate concurrency bounds
+	if opts.concurrency < 1 || opts.concurrency > 20 {
+		return fmt.Errorf("concurrency must be between 1 and 20 (got %d)", opts.concurrency)
+	}
+
+	// Validate delay is non-negative
+	if opts.delay < 0 {
+		return fmt.Errorf("delay must be non-negative (got %d)", opts.delay)
+	}
+
 	confirm, err := pterm.DefaultInteractiveConfirm.Show("Begin role creation?")
 	if err != nil {
 		return err
@@ -209,45 +214,110 @@ func runCreate(_ *cobra.Command, _ []string) error {
 	warningCount := 0
 	errorCount := 0
 
-	for _, org := range validOrgs {
-		exists, existsErr := roleExists(opts.hostname, org, opts.roleName)
-		if existsErr != nil {
-			// Check if it's a 404 (org not found)
-			if isNotFoundError(existsErr) {
-				pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+	// If delay is set, use sequential processing with delays
+	if opts.delay > 0 {
+		for i, org := range validOrgs {
+			exists, existsErr := roleExists(opts.hostname, org, opts.roleName)
+			if existsErr != nil {
+				// Check if it's a 404 (org not found)
+				if isNotFoundError(existsErr) {
+					pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+					warningCount++
+					progressBar.Increment()
+					continue
+				}
+				pterm.Error.Printfln("Failed to check existing roles for %s: %v", org, existsErr)
+				errorCount++
+				progressBar.Increment()
+				continue
+			}
+			if exists {
+				pterm.Warning.Printfln("Organization %s already has a role named %s. Skipping.", org, opts.roleName)
 				warningCount++
 				progressBar.Increment()
 				continue
 			}
-			pterm.Error.Printfln("Failed to check existing roles for %s: %v", org, existsErr)
-			errorCount++
+
+			createErr := createCustomRole(opts.hostname, org, opts.roleName, opts.roleDesc, baseRole, selectedPermissions)
+			if createErr != nil {
+				// Check if it's a 404 (org not found)
+				if isNotFoundError(createErr) {
+					pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+					warningCount++
+					progressBar.Increment()
+					continue
+				}
+				pterm.Error.Printfln("Failed to create role in %s: %v", org, createErr)
+				errorCount++
+				progressBar.Increment()
+				continue
+			}
+			pterm.Success.Printfln("Created role %s in %s", opts.roleName, org)
+			successCount++
 			progressBar.Increment()
-			continue
+
+			// Add delay between requests (except after the last one)
+			if i < len(validOrgs)-1 {
+				time.Sleep(time.Duration(opts.delay) * time.Second)
+			}
 		}
-		if exists {
-			pterm.Warning.Printfln("Organization %s already has a role named %s. Skipping.", org, opts.roleName)
-			warningCount++
-			progressBar.Increment()
-			continue
+	} else {
+		// Use concurrent processing with semaphore
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		semaphore := make(chan struct{}, opts.concurrency)
+
+		for _, org := range validOrgs {
+			wg.Add(1)
+			semaphore <- struct{}{} // Acquire semaphore
+
+			go func(org string) {
+				defer wg.Done()
+				defer func() { <-semaphore }() // Release semaphore
+
+				exists, existsErr := roleExists(opts.hostname, org, opts.roleName)
+				if existsErr != nil {
+					mu.Lock()
+					if isNotFoundError(existsErr) {
+						pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+						warningCount++
+					} else {
+						pterm.Error.Printfln("Failed to check existing roles for %s: %v", org, existsErr)
+						errorCount++
+					}
+					progressBar.Increment()
+					mu.Unlock()
+					return
+				}
+				if exists {
+					mu.Lock()
+					pterm.Warning.Printfln("Organization %s already has a role named %s. Skipping.", org, opts.roleName)
+					warningCount++
+					progressBar.Increment()
+					mu.Unlock()
+					return
+				}
+
+				createErr := createCustomRole(opts.hostname, org, opts.roleName, opts.roleDesc, baseRole, selectedPermissions)
+				mu.Lock()
+				if createErr != nil {
+					if isNotFoundError(createErr) {
+						pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+						warningCount++
+					} else {
+						pterm.Error.Printfln("Failed to create role in %s: %v", org, createErr)
+						errorCount++
+					}
+				} else {
+					pterm.Success.Printfln("Created role %s in %s", opts.roleName, org)
+					successCount++
+				}
+				progressBar.Increment()
+				mu.Unlock()
+			}(org)
 		}
 
-		createErr := createCustomRole(opts.hostname, org, opts.roleName, opts.roleDesc, baseRole, selectedPermissions)
-		if createErr != nil {
-			// Check if it's a 404 (org not found)
-			if isNotFoundError(createErr) {
-				pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
-				warningCount++
-				progressBar.Increment()
-				continue
-			}
-			pterm.Error.Printfln("Failed to create role in %s: %v", org, createErr)
-			errorCount++
-			progressBar.Increment()
-			continue
-		}
-		pterm.Success.Printfln("Created role %s in %s", opts.roleName, org)
-		successCount++
-		progressBar.Increment()
+		wg.Wait()
 	}
 
 	progressBar.Stop()
@@ -279,7 +349,7 @@ func runCreate(_ *cobra.Command, _ []string) error {
 
 func resolveOrganizations(opts options) ([]string, error) {
 	if opts.allOrgs {
-		return fetchOrganizations(opts.hostname, opts.enterprise, math.MaxInt32)
+		return fetchOrganizations(opts.hostname, opts.enterprise)
 	}
 	if opts.org != "" {
 		return []string{normalizeOrg(opts.org)}, nil
@@ -322,31 +392,6 @@ func loadOrganizationsFromCSV(path string) ([]string, error) {
 		}
 	}
 	return orgs, nil
-}
-
-func filterExistingOrganizations(hostname string, orgs []string) ([]string, error) {
-	progressBar, err := pterm.DefaultProgressbar.WithTotal(len(orgs)).WithTitle("Validating organizations").Start()
-	if err != nil {
-		return nil, err
-	}
-	defer progressBar.Stop()
-
-	var valid []string
-	for _, org := range orgs {
-		_, stderr, err := ghAPI(hostname, "orgs/"+org)
-		if err != nil {
-			if isNotFound(err, stderr) {
-				pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
-				progressBar.Increment()
-				continue
-			}
-			progressBar.Increment()
-			return nil, fmt.Errorf("failed to look up organization %s: %w", org, err)
-		}
-		valid = append(valid, org)
-		progressBar.Increment()
-	}
-	return valid, nil
 }
 
 func resolveBaseRole(baseRole string) (string, error) {
@@ -498,31 +543,29 @@ func listFineGrainedPermissions(hostname, org string) ([]fineGrainedPermission, 
 	return permissions, nil
 }
 
-func fetchOrganizations(hostname, enterprise string, orgLimit int) ([]string, error) {
+func fetchOrganizations(hostname, enterprise string) ([]string, error) {
 	if enterprise == "" {
 		return nil, fmt.Errorf("--enterprise flag is required")
 	}
 
-	spinner, err := pterm.DefaultSpinner.Start("Fetching organizations for enterprise")
-	if err != nil {
-		return nil, err
+	pterm.Info.Println("Fetching organizations for enterprise...")
+
+	var spinner *pterm.SpinnerPrinter
+	stopSpinner := func() {
+		if spinner != nil {
+			spinner.Stop()
+		}
 	}
-	defer spinner.Stop()
+	defer stopSpinner()
 
 	const maxPerPage = 100
 	var orgs []string
 	var cursor *string
-	fetched := 0
 
 	for {
-		remaining := orgLimit - fetched
-		if remaining > maxPerPage {
-			remaining = maxPerPage
-		}
-
 		query := `{
 			enterprise(slug: "` + enterprise + `") {
-				organizations(first: ` + fmt.Sprintf("%d", remaining) + `, after: ` + formatCursor(cursor) + `) {
+				organizations(first: ` + fmt.Sprintf("%d", maxPerPage) + `, after: ` + formatCursor(cursor) + `) {
 					nodes {
 						login
 					}
@@ -565,15 +608,20 @@ func fetchOrganizations(hostname, enterprise string, orgLimit int) ([]string, er
 
 		for _, org := range result.Data.Enterprise.Organizations.Nodes {
 			orgs = append(orgs, normalizeOrg(org.Login))
-			fetched++
 		}
 
-		spinner.UpdateText(fmt.Sprintf("Fetched %d organizations", fetched))
+		// Start spinner only after we have successfully fetched at least one page.
+		if spinner == nil {
+			started, err := pterm.DefaultSpinner.Start(fmt.Sprintf("Fetched %d organizations", len(orgs)))
+			if err != nil {
+				return nil, err
+			}
+			spinner = started
+		} else {
+			spinner.UpdateText(fmt.Sprintf("Fetched %d organizations", len(orgs)))
+		}
 
 		if !result.Data.Enterprise.Organizations.PageInfo.HasNextPage {
-			break
-		}
-		if fetched >= orgLimit {
 			break
 		}
 		cursor = &result.Data.Enterprise.Organizations.PageInfo.EndCursor
@@ -593,14 +641,6 @@ func ghAPI(hostname string, args ...string) (bytes.Buffer, bytes.Buffer, error) 
 	fullArgs := []string{"api", "--hostname", hostname, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28"}
 	fullArgs = append(fullArgs, args...)
 	return gh.Exec(fullArgs...)
-}
-
-func isNotFound(err error, stderr bytes.Buffer) bool {
-	if err == nil {
-		return false
-	}
-	errorText := strings.ToLower(stderr.String())
-	return strings.Contains(errorText, "404") || strings.Contains(errorText, "not found")
 }
 
 func isNotFoundError(err error) bool {
@@ -639,6 +679,12 @@ func buildReplicationCommand(opts options, baseRole string, permissions []string
 	if len(permissions) > 0 {
 		permStr := strings.Join(permissions, ",")
 		cmd += " --permissions " + permStr
+	}
+	if opts.delay > 0 {
+		cmd += fmt.Sprintf(" --delay %d", opts.delay)
+	}
+	if opts.concurrency > 1 {
+		cmd += fmt.Sprintf(" --concurrency %d", opts.concurrency)
 	}
 
 	return cmd
