@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
-	"github.com/cli/go-gh"
+	"github.com/cli/go-gh/v2"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +29,8 @@ type options struct {
 	roleDesc    string
 	baseRole    string
 	permissions string
+	delay       int
+	concurrency int
 }
 
 type fineGrainedPermission struct {
@@ -57,6 +61,9 @@ func init() {
 	createCmd.Flags().StringVarP(&opts.roleDesc, "role-description", "d", "", "Custom role description")
 	createCmd.Flags().StringVarP(&opts.baseRole, "base-role", "b", "", "Base role (read, triage, write, maintain)")
 	createCmd.Flags().StringVarP(&opts.permissions, "permissions", "p", "", "Comma-separated list of permission names")
+	createCmd.Flags().IntVar(&opts.delay, "delay", 0, "Seconds to wait between role creations (mutually exclusive with --concurrency)")
+	createCmd.Flags().IntVar(&opts.concurrency, "concurrency", 1, "Number of parallel requests (1-20, mutually exclusive with --delay)")
+	createCmd.MarkFlagsMutuallyExclusive("delay", "concurrency")
 }
 
 func runCreate(_ *cobra.Command, _ []string) error {
@@ -189,6 +196,16 @@ func runCreate(_ *cobra.Command, _ []string) error {
 	pterm.Info.Printfln("Target Organizations: %d", len(validOrgs))
 	pterm.Println()
 
+	// Validate concurrency bounds
+	if opts.concurrency < 1 || opts.concurrency > 20 {
+		return fmt.Errorf("concurrency must be between 1 and 20 (got %d)", opts.concurrency)
+	}
+
+	// Validate delay is non-negative
+	if opts.delay < 0 {
+		return fmt.Errorf("delay must be non-negative (got %d)", opts.delay)
+	}
+
 	confirm, err := pterm.DefaultInteractiveConfirm.Show("Begin role creation?")
 	if err != nil {
 		return err
@@ -209,45 +226,110 @@ func runCreate(_ *cobra.Command, _ []string) error {
 	warningCount := 0
 	errorCount := 0
 
-	for _, org := range validOrgs {
-		exists, existsErr := roleExists(opts.hostname, org, opts.roleName)
-		if existsErr != nil {
-			// Check if it's a 404 (org not found)
-			if isNotFoundError(existsErr) {
-				pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+	// If delay is set, use sequential processing with delays
+	if opts.delay > 0 {
+		for i, org := range validOrgs {
+			exists, existsErr := roleExists(opts.hostname, org, opts.roleName)
+			if existsErr != nil {
+				// Check if it's a 404 (org not found)
+				if isNotFoundError(existsErr) {
+					pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+					warningCount++
+					progressBar.Increment()
+					continue
+				}
+				pterm.Error.Printfln("Failed to check existing roles for %s: %v", org, existsErr)
+				errorCount++
+				progressBar.Increment()
+				continue
+			}
+			if exists {
+				pterm.Warning.Printfln("Organization %s already has a role named %s. Skipping.", org, opts.roleName)
 				warningCount++
 				progressBar.Increment()
 				continue
 			}
-			pterm.Error.Printfln("Failed to check existing roles for %s: %v", org, existsErr)
-			errorCount++
+
+			createErr := createCustomRole(opts.hostname, org, opts.roleName, opts.roleDesc, baseRole, selectedPermissions)
+			if createErr != nil {
+				// Check if it's a 404 (org not found)
+				if isNotFoundError(createErr) {
+					pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+					warningCount++
+					progressBar.Increment()
+					continue
+				}
+				pterm.Error.Printfln("Failed to create role in %s: %v", org, createErr)
+				errorCount++
+				progressBar.Increment()
+				continue
+			}
+			pterm.Success.Printfln("Created role %s in %s", opts.roleName, org)
+			successCount++
 			progressBar.Increment()
-			continue
+
+			// Add delay between requests (except after the last one)
+			if i < len(validOrgs)-1 {
+				time.Sleep(time.Duration(opts.delay) * time.Second)
+			}
 		}
-		if exists {
-			pterm.Warning.Printfln("Organization %s already has a role named %s. Skipping.", org, opts.roleName)
-			warningCount++
-			progressBar.Increment()
-			continue
+	} else {
+		// Use concurrent processing with semaphore
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		semaphore := make(chan struct{}, opts.concurrency)
+
+		for _, org := range validOrgs {
+			wg.Add(1)
+			semaphore <- struct{}{} // Acquire semaphore
+
+			go func(org string) {
+				defer wg.Done()
+				defer func() { <-semaphore }() // Release semaphore
+
+				exists, existsErr := roleExists(opts.hostname, org, opts.roleName)
+				if existsErr != nil {
+					mu.Lock()
+					if isNotFoundError(existsErr) {
+						pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+						warningCount++
+					} else {
+						pterm.Error.Printfln("Failed to check existing roles for %s: %v", org, existsErr)
+						errorCount++
+					}
+					progressBar.Increment()
+					mu.Unlock()
+					return
+				}
+				if exists {
+					mu.Lock()
+					pterm.Warning.Printfln("Organization %s already has a role named %s. Skipping.", org, opts.roleName)
+					warningCount++
+					progressBar.Increment()
+					mu.Unlock()
+					return
+				}
+
+				createErr := createCustomRole(opts.hostname, org, opts.roleName, opts.roleDesc, baseRole, selectedPermissions)
+				mu.Lock()
+				if createErr != nil {
+					if isNotFoundError(createErr) {
+						pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
+						warningCount++
+					} else {
+						pterm.Error.Printfln("Failed to create role in %s: %v", org, createErr)
+						errorCount++
+					}
+				} else {
+					pterm.Success.Printfln("Created role %s in %s", opts.roleName, org)
+					successCount++
+				}
+				progressBar.Increment()
+				mu.Unlock()
+			}(org)
 		}
 
-		createErr := createCustomRole(opts.hostname, org, opts.roleName, opts.roleDesc, baseRole, selectedPermissions)
-		if createErr != nil {
-			// Check if it's a 404 (org not found)
-			if isNotFoundError(createErr) {
-				pterm.Warning.Printfln("Organization %s not found. Skipping.", org)
-				warningCount++
-				progressBar.Increment()
-				continue
-			}
-			pterm.Error.Printfln("Failed to create role in %s: %v", org, createErr)
-			errorCount++
-			progressBar.Increment()
-			continue
-		}
-		pterm.Success.Printfln("Created role %s in %s", opts.roleName, org)
-		successCount++
-		progressBar.Increment()
+		wg.Wait()
 	}
 
 	progressBar.Stop()
@@ -639,6 +721,12 @@ func buildReplicationCommand(opts options, baseRole string, permissions []string
 	if len(permissions) > 0 {
 		permStr := strings.Join(permissions, ",")
 		cmd += " --permissions " + permStr
+	}
+	if opts.delay > 0 {
+		cmd += fmt.Sprintf(" --delay %d", opts.delay)
+	}
+	if opts.concurrency > 1 {
+		cmd += fmt.Sprintf(" --concurrency %d", opts.concurrency)
 	}
 
 	return cmd
