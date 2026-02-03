@@ -729,9 +729,16 @@ func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
 		headerLines := strings.Split(headerText, "\n")
 		for _, line := range headerLines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(strings.ToLower(line), "x-oauth-scopes:") {
+			lowerLine := strings.ToLower(line)
+			if strings.HasPrefix(lowerLine, "x-oauth-scopes:") {
 				oauthScopes = strings.TrimSpace(strings.TrimPrefix(line, "x-oauth-scopes:"))
-				oauthScopes = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(oauthScopes), "x-oauth-scopes:"))
+				// Handle case-insensitive header names
+				if oauthScopes == line {
+					oauthScopes = strings.TrimSpace(strings.TrimPrefix(line, "X-OAuth-Scopes:"))
+				}
+				if oauthScopes == line {
+					oauthScopes = strings.TrimSpace(strings.TrimPrefix(line, "X-Oauth-Scopes:"))
+				}
 			}
 		}
 		
