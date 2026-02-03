@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2"
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
@@ -108,6 +110,11 @@ func runCreate(_ *cobra.Command, _ []string) error {
 		default:
 			return errors.New("invalid target selection")
 		}
+	}
+
+	// Validate GitHub environment (GHES version and OAuth scopes)
+	if err := validateGitHubEnvironment(opts.hostname, opts.allOrgs); err != nil {
+		return err
 	}
 
 	// Only prompt for enterprise slug if targeting all organizations
@@ -688,4 +695,74 @@ func buildReplicationCommand(opts options, baseRole string, permissions []string
 	}
 
 	return cmd
+}
+
+// validateGitHubEnvironment validates GHES version and OAuth scopes
+func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
+	client, err := api.NewRESTClient(api.ClientOptions{
+		Host: hostname,
+		Headers: map[string]string{
+			"Accept":               "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize GitHub API client: %w", err)
+	}
+
+	resp, err := client.Request("GET", "meta", nil)
+	if err != nil {
+		return fmt.Errorf("failed to fetch GitHub meta endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("failed to fetch GitHub meta endpoint: %s (%s)", resp.Status, strings.TrimSpace(string(snippet)))
+	}
+
+	oauthScopes := resp.Header.Get("X-OAuth-Scopes")
+	// Drain body to allow connection reuse; we only need the headers here.
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	// Validate OAuth scopes
+	scopes := parseOAuthScopes(oauthScopes)
+
+	// Check for admin:org scope (required for all operations)
+	if !hasScope(scopes, "admin:org") {
+		return fmt.Errorf("missing required OAuth scope 'admin:org'. Please run: gh auth refresh -h %s -s admin:org", hostname)
+	}
+
+	// Check for read:enterprise scope when targeting all orgs
+	if targetingAllOrgs && !hasScope(scopes, "read:enterprise") {
+		return fmt.Errorf("missing required OAuth scope 'read:enterprise' for targeting all organizations. Please run: gh auth refresh -h %s -s read:enterprise", hostname)
+	}
+
+	return nil
+}
+
+// parseOAuthScopes parses comma-separated OAuth scopes
+func parseOAuthScopes(scopesHeader string) []string {
+	if scopesHeader == "" {
+		return []string{}
+	}
+	parts := strings.Split(scopesHeader, ",")
+	var scopes []string
+	for _, part := range parts {
+		scope := strings.TrimSpace(part)
+		if scope != "" {
+			scopes = append(scopes, scope)
+		}
+	}
+	return scopes
+}
+
+// hasScope checks if a scope exists in the list of scopes
+func hasScope(scopes []string, targetScope string) bool {
+	for _, scope := range scopes {
+		if scope == targetScope {
+			return true
+		}
+	}
+	return false
 }
