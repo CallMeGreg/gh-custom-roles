@@ -48,10 +48,6 @@ type customRolesResponse struct {
 	Custom     []customRole `json:"custom_roles"`
 }
 
-type metaResponse struct {
-	InstalledVersion string `json:"installed_version"`
-}
-
 var opts options
 
 var createCmd = &cobra.Command{
@@ -726,21 +722,8 @@ func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
 	}
 
 	oauthScopes := resp.Header.Get("X-OAuth-Scopes")
-
-	var meta metaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		return fmt.Errorf("failed to parse GitHub meta response: %w", err)
-	}
-	installedVersion := meta.InstalledVersion
-
-	// Validate GHES version
-	if installedVersion != "" {
-		// Parse version and check if it's below 3.15
-		version := strings.TrimSpace(installedVersion)
-		if isVersionBelow(version, "3.15.0") {
-			pterm.Warning.Printfln("Warning: GitHub Enterprise Server version %s is below 3.15.0. Some features may not be supported.", version)
-		}
-	}
+	// Drain body to allow connection reuse; we only need the headers here.
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	// Validate OAuth scopes
 	scopes := parseOAuthScopes(oauthScopes)
@@ -782,37 +765,4 @@ func hasScope(scopes []string, targetScope string) bool {
 		}
 	}
 	return false
-}
-
-// isVersionBelow checks if version1 is below version2
-func isVersionBelow(version1, version2 string) bool {
-	v1Parts := parseVersion(version1)
-	v2Parts := parseVersion(version2)
-
-	for i := 0; i < 3; i++ {
-		if v1Parts[i] < v2Parts[i] {
-			return true
-		}
-		if v1Parts[i] > v2Parts[i] {
-			return false
-		}
-	}
-	return false
-}
-
-// parseVersion parses a version string (e.g., "3.15.0") into [major, minor, patch]
-func parseVersion(version string) [3]int {
-	var parts [3]int
-	components := strings.Split(version, ".")
-	for i := 0; i < 3 && i < len(components); i++ {
-		var val int
-		// Scan only the numeric prefix to handle versions like "3.15.0-beta"
-		_, err := fmt.Sscanf(components[i], "%d", &val)
-		if err != nil {
-			// If parsing fails, leave as 0
-			val = 0
-		}
-		parts[i] = val
-	}
-	return parts
 }
