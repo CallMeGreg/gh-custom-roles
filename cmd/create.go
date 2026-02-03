@@ -46,6 +46,10 @@ type customRolesResponse struct {
 	Custom     []customRole `json:"custom_roles"`
 }
 
+type metaResponse struct {
+	InstalledVersion string `json:"installed_version"`
+}
+
 var opts options
 
 var createCmd = &cobra.Command{
@@ -108,6 +112,11 @@ func runCreate(_ *cobra.Command, _ []string) error {
 		default:
 			return errors.New("invalid target selection")
 		}
+	}
+
+	// Validate GitHub environment (GHES version and OAuth scopes)
+	if err := validateGitHubEnvironment(opts.hostname, opts.allOrgs); err != nil {
+		return err
 	}
 
 	// Only prompt for enterprise slug if targeting all organizations
@@ -688,4 +697,126 @@ func buildReplicationCommand(opts options, baseRole string, permissions []string
 	}
 
 	return cmd
+}
+
+// validateGitHubEnvironment validates GHES version and OAuth scopes
+func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
+	// Fetch meta endpoint
+	fullArgs := []string{"api", "--hostname", hostname, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", "--include", "/meta"}
+	stdout, stderr, err := gh.Exec(fullArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to fetch GitHub meta endpoint: %w (%s)", err, stderr.String())
+	}
+
+	// Parse response to extract headers and body
+	responseText := stdout.String()
+	
+	// Extract headers from response
+	var oauthScopes string
+	var installedVersion string
+	
+	// Split response into headers and body
+	parts := strings.Split(responseText, "\r\n\r\n")
+	if len(parts) < 2 {
+		parts = strings.Split(responseText, "\n\n")
+	}
+	
+	if len(parts) >= 2 {
+		headerText := parts[0]
+		bodyText := parts[len(parts)-1]
+		
+		// Parse headers
+		headerLines := strings.Split(headerText, "\n")
+		for _, line := range headerLines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(strings.ToLower(line), "x-oauth-scopes:") {
+				oauthScopes = strings.TrimSpace(strings.TrimPrefix(line, "x-oauth-scopes:"))
+				oauthScopes = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(oauthScopes), "x-oauth-scopes:"))
+			}
+		}
+		
+		// Parse body for installed_version
+		var meta metaResponse
+		if err := json.Unmarshal([]byte(bodyText), &meta); err == nil {
+			installedVersion = meta.InstalledVersion
+		}
+	}
+
+	// Validate GHES version
+	if installedVersion != "" {
+		// Parse version and check if it's below 3.15
+		version := strings.TrimSpace(installedVersion)
+		if isVersionBelow(version, "3.15.0") {
+			pterm.Warning.Printfln("Warning: GitHub Enterprise Server version %s is below 3.15.0. Some features may not be supported.", version)
+		}
+	}
+
+	// Validate OAuth scopes
+	scopes := parseOAuthScopes(oauthScopes)
+	
+	// Check for admin:org scope (required for all operations)
+	if !hasScope(scopes, "admin:org") {
+		return fmt.Errorf("missing required OAuth scope 'admin:org'. Please run: gh auth refresh -s \"admin:org\"")
+	}
+	
+	// Check for read:enterprise scope when targeting all orgs
+	if targetingAllOrgs && !hasScope(scopes, "read:enterprise") {
+		return fmt.Errorf("missing required OAuth scope 'read:enterprise' for targeting all organizations. Please run: gh auth refresh -s \"read:enterprise\"")
+	}
+
+	return nil
+}
+
+// parseOAuthScopes parses comma-separated OAuth scopes
+func parseOAuthScopes(scopesHeader string) []string {
+	if scopesHeader == "" {
+		return []string{}
+	}
+	parts := strings.Split(scopesHeader, ",")
+	var scopes []string
+	for _, part := range parts {
+		scope := strings.TrimSpace(part)
+		if scope != "" {
+			scopes = append(scopes, scope)
+		}
+	}
+	return scopes
+}
+
+// hasScope checks if a scope exists in the list of scopes
+func hasScope(scopes []string, targetScope string) bool {
+	for _, scope := range scopes {
+		if scope == targetScope {
+			return true
+		}
+	}
+	return false
+}
+
+// isVersionBelow checks if version1 is below version2
+func isVersionBelow(version1, version2 string) bool {
+	v1Parts := parseVersion(version1)
+	v2Parts := parseVersion(version2)
+	
+	for i := 0; i < 3; i++ {
+		if v1Parts[i] < v2Parts[i] {
+			return true
+		}
+		if v1Parts[i] > v2Parts[i] {
+			return false
+		}
+	}
+	return false
+}
+
+// parseVersion parses a version string (e.g., "3.15.0") into [major, minor, patch]
+func parseVersion(version string) [3]int {
+	var parts [3]int
+	components := strings.Split(version, ".")
+	for i := 0; i < 3 && i < len(components); i++ {
+		var val int
+		fmt.Sscanf(components[i], "%d", &val)
+		parts[i] = val
+	}
+	return parts
 }
