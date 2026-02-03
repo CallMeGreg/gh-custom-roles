@@ -731,13 +731,10 @@ func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
 			line = strings.TrimSpace(line)
 			lowerLine := strings.ToLower(line)
 			if strings.HasPrefix(lowerLine, "x-oauth-scopes:") {
-				oauthScopes = strings.TrimSpace(strings.TrimPrefix(line, "x-oauth-scopes:"))
-				// Handle case-insensitive header names
-				if oauthScopes == line {
-					oauthScopes = strings.TrimSpace(strings.TrimPrefix(line, "X-OAuth-Scopes:"))
-				}
-				if oauthScopes == line {
-					oauthScopes = strings.TrimSpace(strings.TrimPrefix(line, "X-Oauth-Scopes:"))
+				// Extract the value after the colon, preserving the original case
+				colonIndex := strings.Index(line, ":")
+				if colonIndex >= 0 && colonIndex < len(line)-1 {
+					oauthScopes = strings.TrimSpace(line[colonIndex+1:])
 				}
 			}
 		}
@@ -763,12 +760,12 @@ func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
 	
 	// Check for admin:org scope (required for all operations)
 	if !hasScope(scopes, "admin:org") {
-		return fmt.Errorf("missing required OAuth scope 'admin:org'. Please run: gh auth refresh -s \"admin:org\"")
+		return fmt.Errorf("missing required OAuth scope 'admin:org'. Please run: gh auth refresh -h %s -s admin:org (note: this will replace existing scopes, so include any other scopes you need)", hostname)
 	}
 	
 	// Check for read:enterprise scope when targeting all orgs
 	if targetingAllOrgs && !hasScope(scopes, "read:enterprise") {
-		return fmt.Errorf("missing required OAuth scope 'read:enterprise' for targeting all organizations. Please run: gh auth refresh -s \"read:enterprise\"")
+		return fmt.Errorf("missing required OAuth scope 'read:enterprise' for targeting all organizations. Please run: gh auth refresh -h %s -s admin:org -s read:enterprise (note: include all scopes you need)", hostname)
 	}
 
 	return nil
@@ -822,7 +819,12 @@ func parseVersion(version string) [3]int {
 	components := strings.Split(version, ".")
 	for i := 0; i < 3 && i < len(components); i++ {
 		var val int
-		fmt.Sscanf(components[i], "%d", &val)
+		// Scan only the numeric prefix to handle versions like "3.15.0-beta"
+		_, err := fmt.Sscanf(components[i], "%d", &val)
+		if err != nil {
+			// If parsing fails, leave as 0
+			val = 0
+		}
 		parts[i] = val
 	}
 	return parts
