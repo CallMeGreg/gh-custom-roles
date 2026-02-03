@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2"
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
@@ -701,52 +703,35 @@ func buildReplicationCommand(opts options, baseRole string, permissions []string
 
 // validateGitHubEnvironment validates GHES version and OAuth scopes
 func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
-	// Fetch meta endpoint
-	fullArgs := []string{"api", "--hostname", hostname, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", "--include", "/meta"}
-	stdout, stderr, err := gh.Exec(fullArgs...)
+	client, err := api.NewRESTClient(api.ClientOptions{
+		Host: hostname,
+		Headers: map[string]string{
+			"Accept":               "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("failed to fetch GitHub meta endpoint: %w (%s)", err, stderr.String())
+		return fmt.Errorf("failed to initialize GitHub API client: %w", err)
 	}
 
-	// Parse response to extract headers and body
-	responseText := stdout.String()
-	
-	// Extract headers from response
-	var oauthScopes string
-	var installedVersion string
-	
-	// Split response into headers and body (try both CRLF and LF)
-	headerBodySplit := "\r\n\r\n"
-	parts := strings.SplitN(responseText, headerBodySplit, 2)
-	if len(parts) < 2 {
-		headerBodySplit = "\n\n"
-		parts = strings.SplitN(responseText, headerBodySplit, 2)
+	resp, err := client.Request("GET", "meta", nil)
+	if err != nil {
+		return fmt.Errorf("failed to fetch GitHub meta endpoint: %w", err)
 	}
-	
-	if len(parts) >= 2 {
-		headerText := parts[0]
-		bodyText := parts[1]
-		
-		// Parse headers
-		headerLines := strings.Split(headerText, "\n")
-		for _, line := range headerLines {
-			line = strings.TrimSpace(line)
-			lowerLine := strings.ToLower(line)
-			if strings.HasPrefix(lowerLine, "x-oauth-scopes:") {
-				// Extract the value after the colon, preserving the original case
-				colonIndex := strings.Index(line, ":")
-				if colonIndex >= 0 && colonIndex < len(line)-1 {
-					oauthScopes = strings.TrimSpace(line[colonIndex+1:])
-				}
-			}
-		}
-		
-		// Parse body for installed_version
-		var meta metaResponse
-		if err := json.Unmarshal([]byte(bodyText), &meta); err == nil {
-			installedVersion = meta.InstalledVersion
-		}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("failed to fetch GitHub meta endpoint: %s (%s)", resp.Status, strings.TrimSpace(string(snippet)))
 	}
+
+	oauthScopes := resp.Header.Get("X-OAuth-Scopes")
+
+	var meta metaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return fmt.Errorf("failed to parse GitHub meta response: %w", err)
+	}
+	installedVersion := meta.InstalledVersion
 
 	// Validate GHES version
 	if installedVersion != "" {
@@ -759,15 +744,15 @@ func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
 
 	// Validate OAuth scopes
 	scopes := parseOAuthScopes(oauthScopes)
-	
+
 	// Check for admin:org scope (required for all operations)
 	if !hasScope(scopes, "admin:org") {
-		return fmt.Errorf("missing required OAuth scope 'admin:org'. Please run: gh auth refresh -h %s -s admin:org (note: this will replace existing scopes, so include any other scopes you need)", hostname)
+		return fmt.Errorf("missing required OAuth scope 'admin:org'. Please run: gh auth refresh -h %s -s admin:org", hostname)
 	}
-	
+
 	// Check for read:enterprise scope when targeting all orgs
 	if targetingAllOrgs && !hasScope(scopes, "read:enterprise") {
-		return fmt.Errorf("missing required OAuth scope 'read:enterprise' for targeting all organizations. Please run: gh auth refresh -h %s -s admin:org -s read:enterprise (note: include all scopes you need)", hostname)
+		return fmt.Errorf("missing required OAuth scope 'read:enterprise' for targeting all organizations. Please run: gh auth refresh -h %s -s read:enterprise", hostname)
 	}
 
 	return nil
@@ -803,7 +788,7 @@ func hasScope(scopes []string, targetScope string) bool {
 func isVersionBelow(version1, version2 string) bool {
 	v1Parts := parseVersion(version1)
 	v2Parts := parseVersion(version2)
-	
+
 	for i := 0; i < 3; i++ {
 		if v1Parts[i] < v2Parts[i] {
 			return true
