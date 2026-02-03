@@ -715,15 +715,17 @@ func validateGitHubEnvironment(hostname string, targetingAllOrgs bool) error {
 	var oauthScopes string
 	var installedVersion string
 	
-	// Split response into headers and body
-	parts := strings.Split(responseText, "\r\n\r\n")
+	// Split response into headers and body (try both CRLF and LF)
+	headerBodySplit := "\r\n\r\n"
+	parts := strings.SplitN(responseText, headerBodySplit, 2)
 	if len(parts) < 2 {
-		parts = strings.Split(responseText, "\n\n")
+		headerBodySplit = "\n\n"
+		parts = strings.SplitN(responseText, headerBodySplit, 2)
 	}
 	
 	if len(parts) >= 2 {
 		headerText := parts[0]
-		bodyText := parts[len(parts)-1]
+		bodyText := parts[1]
 		
 		// Parse headers
 		headerLines := strings.Split(headerText, "\n")
