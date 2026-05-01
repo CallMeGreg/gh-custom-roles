@@ -89,6 +89,7 @@ gh custom-roles create \
 | `--permissions` | `-p` | Comma-separated permission names | - |
 | `--delay` | `-w` | Seconds to wait between role creations (mutually exclusive with `--concurrency`) | `0` |
 | `--concurrency` | `-x` | Number of parallel requests (1-20, mutually exclusive with `--delay`) | `1` |
+| `--skip-confirmation-message` | - | Skip the confirmation prompt before proceeding | `false` |
 
 > [!WARNING]
 > **Rate Limiting Considerations**: Setting concurrency higher than 1 increases the likelihood of encountering GitHub's secondary rate limits. To avoid rate limiting issues, consider [exempting the user from rate limits](https://docs.github.com/en/enterprise-server@3.15/admin/administering-your-instance/administering-your-instance-from-the-command-line/command-line-utilities#ghe-config).

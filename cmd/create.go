@@ -21,17 +21,18 @@ import (
 )
 
 type options struct {
-	hostname    string
-	enterprise  string
-	org         string
-	allOrgs     bool
-	orgsCSVPath string
-	roleName    string
-	roleDesc    string
-	baseRole    string
-	permissions string
-	delay       int
-	concurrency int
+	hostname             string
+	enterprise           string
+	org                  string
+	allOrgs              bool
+	orgsCSVPath          string
+	roleName             string
+	roleDesc             string
+	baseRole             string
+	permissions          string
+	delay                int
+	concurrency          int
+	skipConfirmation     bool
 }
 
 type fineGrainedPermission struct {
@@ -201,13 +202,15 @@ func runCreate(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("delay must be non-negative (got %d)", opts.delay)
 	}
 
-	confirm, err := pterm.DefaultInteractiveConfirm.Show("Begin role creation?")
-	if err != nil {
-		return err
-	}
-	if !confirm {
-		pterm.Info.Println("Role creation cancelled.")
-		return nil
+	if !opts.skipConfirmation {
+		confirm, err := pterm.DefaultInteractiveConfirm.Show("Begin role creation?")
+		if err != nil {
+			return err
+		}
+		if !confirm {
+			pterm.Info.Println("Role creation cancelled.")
+			return nil
+		}
 	}
 	pterm.Println()
 
