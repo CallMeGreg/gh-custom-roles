@@ -24,6 +24,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&opts.orgsCSVPath, "orgs-csv", "c", "", "CSV file path with organizations to target")
 	rootCmd.PersistentFlags().IntVarP(&opts.concurrency, "concurrency", "x", 1, "Number of parallel requests (1-20, mutually exclusive with --delay)")
 	rootCmd.PersistentFlags().IntVarP(&opts.delay, "delay", "w", 0, "Seconds to wait between role creations (mutually exclusive with --concurrency)")
+	rootCmd.PersistentFlags().BoolVar(&opts.skipConfirmation, "skip-confirmation-message", false, "Skip the confirmation prompt before proceeding")
 	rootCmd.MarkFlagsMutuallyExclusive("org", "all-orgs", "orgs-csv")
 	rootCmd.MarkFlagsMutuallyExclusive("delay", "concurrency")
 
