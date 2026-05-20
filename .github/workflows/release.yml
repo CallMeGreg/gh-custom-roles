@@ -5,6 +5,8 @@ on:
     branches:
       - main
 
+# TODO: Review broad permissions — contents:write (tag push + release), id-token:write (OIDC),
+# and attestations:write are required by gh-extension-precompile. Scope further if possible.
 permissions:
   contents: write
   id-token: write
@@ -15,7 +17,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
       
@@ -106,7 +108,7 @@ jobs:
           git tag ${{ steps.next_version.outputs.version }}
           git push origin ${{ steps.next_version.outputs.version }}
       
-      - uses: cli/gh-extension-precompile@v2.1.0
+      - uses: cli/gh-extension-precompile@9e2237c30f869ad3bcaed6a4be2cd43564dd421b # v2.1.0
         with:
           go_version_file: go.mod
           generate_attestations: true
